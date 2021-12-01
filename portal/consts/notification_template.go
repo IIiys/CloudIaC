@@ -71,6 +71,23 @@ var IacTaskCompleteTpl = `
 </html>
 `
 
+var IacCronDriftTaskTpl = `
+<html>
+<body>
+<p>尊敬的 CloudIaC 用户：</p>
+<br />
+<p>	【{{.Creator}}】在 CloudIaC 平台发起的漂移检测任务检测到服务端配置出现漂移，详情如下：</p> 
+<br />	
+<p>	所属组织：{{.OrgName}}</p>
+<p>	所属项目：{{.ProjectName}}</p>
+<p>	云模板：{{.TemplateName}}</p>
+<p>	分支/tag：{{.Revision}}</p>
+<p>	环境名称：{{.EnvName}}</p>
+<p>	-----该邮件由系统自动发出，请勿回复-----</p>
+</body>
+</html>
+`
+
 var IacTaskFailedTpl = `
 <html>
 <body>
@@ -213,5 +230,23 @@ const (
 	更多详情请点击：{{.Addr}}
 
 	-----该消息由系统自动发出，请勿回复-----
+`
+	IacCronDriftTaskMarkDown = `
+尊敬的CloudIaC用户：
+
+  【{{.Creator}}】在CloudIaC平台发起的漂移检测任务检测到服务端配置出现漂移，详情如下：
+
+  所属组织：{{.OrgName}}
+
+  所属项目：{{.ProjectName}}
+
+  云模板：{{.TemplateName}}
+
+  分支/tag：{{.Revision}}
+
+  环境名称：{{.EnvName}}
+
+
+  -----该消息由系统自动发出，请勿回复-----
 `
 )

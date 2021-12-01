@@ -71,6 +71,7 @@ func (t *Task) start() (cid string, err error) {
 	conf := configs.Get().Runner
 	cmd := Executor{
 		Image:       conf.DefaultImage,
+		Name:        t.req.TaskId,
 		Timeout:     t.req.Timeout,
 		Workdir:     ContainerWorkspace,
 		HostWorkdir: t.workspace,
@@ -127,7 +128,7 @@ func (t *Task) start() (cid string, err error) {
 		return "", errors.Wrap(err, "remove containerInfoFile")
 	}
 
-	t.logger.Infof("start task step, workdir: %s", cmd.HostWorkdir)
+	t.logger.Infof("start task step, %s", stepDir)
 	if cid, err = cmd.Start(); err != nil {
 		return cid, err
 	}
@@ -556,7 +557,7 @@ var parseCommandTpl = template.Must(template.New("").Parse(`#!/bin/sh
 cd 'code/{{.Req.Env.Workdir}}' && \
 mkdir -p {{.PoliciesDir}} && \
 mkdir -p ~/.terrascan/pkg/policies/opa/rego/aws && \
-terrascan scan --config-only -l debug -o json > {{.TFScanJsonFilePath}}
+terrascan scan --config-only -l debug -o json --iac-type terraform > {{.TFScanJsonFilePath}}
 `))
 
 func (t *Task) stepTfParse() (command string, err error) {

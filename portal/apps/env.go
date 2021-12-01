@@ -20,8 +20,86 @@ import (
 	"strings"
 	"time"
 
+	"github.com/robfig/cron/v3"
+
 	"github.com/lib/pq"
 )
+
+// 最小时间单位为分钟
+// 每隔1 分钟执行一次 */1 * * * ?
+// 每天 23点 执行一次 0 23 * * ?
+// 每个月1号23 点执行一次 0 23 1 * ?
+// 每天的0点、13点、18点、21点都执行一次：0 0,13,18,21 * * ?
+var SpecParser = cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow)
+
+func ParseCronpress(cronDriftExpress string) (*time.Time, e.Error) {
+	expr, err := SpecParser.Parse(cronDriftExpress)
+	if err != nil {
+		return nil, e.New(e.BadParam, http.StatusBadRequest, err)
+	}
+	// 根据当前时间算出下次该环境下次执行偏移检测任务时间
+	nextTime := expr.Next(time.Now())
+	return &nextTime, nil
+}
+
+// 获取环境偏移检测任务类型并且检查其参数
+func GetCronTaskTypeAndCheckParam(cronExpress string, autoRepairDrift, openCronDrift bool) (string, e.Error) {
+	if openCronDrift {
+		if cronExpress == "" {
+			return "", e.New(e.BadParam, http.StatusBadRequest, "Please set cronExpress when openCronDrift is set")
+		}
+	}
+	if autoRepairDrift {
+		if !openCronDrift || cronExpress == "" {
+			return "", e.New(e.BadParam, http.StatusBadRequest, "Please set openCronDrift to true when autoRepairDrift is set")
+		}
+	}
+	if openCronDrift {
+		if autoRepairDrift == false {
+			return models.TaskTypePlan, nil
+		} else {
+			return models.TaskTypeApply, nil
+		}
+	}
+	// 未开启漂移检测任务
+	return "", nil
+}
+
+type CronDriftParam struct {
+	CronDriftExpress  string     `json:"cronDriftExpress"`  // 偏移检测表达式
+	AutoRepairDrift   bool       `json:"autoRepairDrift"`   // 是否进行自动纠偏
+	OpenCronDrift     bool       `json:"openCronDrift"`     // 是否开启偏移检测
+	NextDriftTaskTime *time.Time `json:"nextDriftTaskTime"` // 下次执行偏移检测任务的时间
+}
+
+func GetCronDriftParam(form forms.CronDriftForm) (*CronDriftParam, e.Error) {
+	cronDriftParam := &CronDriftParam{}
+	if form.HasKey("cronDriftExpress") || form.HasKey("autoRepairDrift") || form.HasKey("openCronDrift") {
+		cronTaskType, err := GetCronTaskTypeAndCheckParam(form.CronDriftExpress, form.AutoRepairDrift, form.OpenCronDrift)
+		if err != nil {
+			return nil, err
+		}
+		if form.HasKey("autoRepairDrift") {
+			cronDriftParam.AutoRepairDrift = form.AutoRepairDrift
+		}
+		if form.HasKey("openCronDrift") {
+			cronDriftParam.OpenCronDrift = form.OpenCronDrift
+		}
+		if cronTaskType != "" {
+			// 如果任务类型不为空，说明配置了漂移检测任务
+			cronDriftParam.CronDriftExpress = form.CronDriftExpress
+			nextTime, err := ParseCronpress(form.CronDriftExpress)
+			if err != nil {
+				return nil, err
+			}
+			cronDriftParam.NextDriftTaskTime = nextTime
+		} else {
+			// 更新配置取消漂移检测任务，将下次重试时间重置为nil
+			cronDriftParam.NextDriftTaskTime = nil
+		}
+	}
+	return cronDriftParam, nil
+}
 
 // CreateEnv 创建环境
 func CreateEnv(c *ctx.ServiceContext, form *forms.CreateEnvForm) (*models.EnvDetail, e.Error) {
@@ -29,6 +107,11 @@ func CreateEnv(c *ctx.ServiceContext, form *forms.CreateEnvForm) (*models.EnvDet
 
 	if c.OrgId == "" || c.ProjectId == "" {
 		return nil, e.New(e.BadRequest, http.StatusBadRequest)
+	}
+
+	// 检查自动纠漂移、推送到分支时重新部署时，是否了配置自动审批
+	if !services.CheckoutAutoApproval(form.AutoApproval, form.AutoRepairDrift, form.Triggers) {
+		return nil, e.New(e.EnvCheckAutoApproval, http.StatusBadRequest)
 	}
 
 	// 检查模板
@@ -90,7 +173,7 @@ func CreateEnv(c *ctx.ServiceContext, form *forms.CreateEnvForm) (*models.EnvDet
 		runnerId = rId
 	}
 
-	env, err := services.CreateEnv(tx, models.Env{
+	envModel := models.Env{
 		OrgId:     c.OrgId,
 		ProjectId: c.ProjectId,
 		CreatorId: c.UserId,
@@ -119,9 +202,26 @@ func CreateEnv(c *ctx.ServiceContext, form *forms.CreateEnvForm) (*models.EnvDet
 		RetryDelay:  form.RetryDelay,
 		RetryNumber: form.RetryNumber,
 
-		ExtraData: models.JSON(form.ExtraData),
-		Callback:  form.Callback,
-	})
+		ExtraData:        models.JSON(form.ExtraData),
+		Callback:         form.Callback,
+		AutoRepairDrift:  form.AutoRepairDrift,
+		CronDriftExpress: form.CronDriftExpress,
+		OpenCronDrift:    form.OpenCronDrift,
+	}
+	// 检查偏移检测参数
+	cronTaskType, err := GetCronTaskTypeAndCheckParam(form.CronDriftExpress, form.AutoRepairDrift, form.OpenCronDrift)
+	if err != nil {
+		return nil, err
+	}
+	// 如果定时任务存在，保存参数到表内容
+	if cronTaskType != "" {
+		nextTime, err := ParseCronpress(form.CronDriftExpress)
+		if err != nil {
+			return nil, err
+		}
+		envModel.NextDriftTaskTime = nextTime
+	}
+	env, err := services.CreateEnv(tx, envModel)
 	if err != nil && err.Code() == e.EnvAlreadyExists {
 		_ = tx.Rollback()
 		return nil, e.New(err.Code(), err, http.StatusBadRequest)
@@ -189,6 +289,7 @@ func CreateEnv(c *ctx.ServiceContext, form *forms.CreateEnvForm) (*models.EnvDet
 		ExtraData: models.JSON(form.ExtraData),
 		Callback:  form.Callback,
 	})
+
 	if err != nil {
 		_ = tx.Rollback()
 		c.Logger().Errorf("error creating task, err %s", err)
@@ -332,6 +433,12 @@ func UpdateEnv(c *ctx.ServiceContext, form *forms.UpdateEnvForm) (*models.EnvDet
 	if c.OrgId == "" || c.ProjectId == "" {
 		return nil, e.New(e.BadRequest, http.StatusBadRequest)
 	}
+
+	// 检查自动纠漂移、推送到分支时重新部署时，是否了配置自动审批
+	if !services.CheckoutAutoApproval(form.AutoApproval, form.AutoRepairDrift, form.Triggers) {
+		return nil, e.New(e.EnvCheckAutoApproval, http.StatusBadRequest)
+	}
+
 	query := c.DB().Where("iac_env.org_id = ? AND iac_env.project_id = ?", c.OrgId, c.ProjectId)
 
 	env, err := services.GetEnvById(query, form.Id)
@@ -348,6 +455,22 @@ func UpdateEnv(c *ctx.ServiceContext, form *forms.UpdateEnvForm) (*models.EnvDet
 	}
 
 	attrs := models.Attrs{}
+
+	cronDriftParam, err := GetCronDriftParam(forms.CronDriftForm{
+		BaseForm:         form.BaseForm,
+		CronDriftExpress: form.CronDriftExpress,
+		AutoRepairDrift:  form.AutoRepairDrift,
+		OpenCronDrift:    form.OpenCronDrift,
+	})
+
+	if err != nil {
+		return nil, err
+	}
+	attrs["autoRepairDrift"] = cronDriftParam.AutoRepairDrift
+	attrs["openCronDrift"] = cronDriftParam.OpenCronDrift
+	attrs["cronDriftExpress"] = cronDriftParam.CronDriftExpress
+	attrs["nextDriftTaskTime"] = cronDriftParam.NextDriftTaskTime
+
 	if form.HasKey("name") {
 		attrs["name"] = form.Name
 	}
@@ -488,6 +611,11 @@ func envDeploy(c *ctx.ServiceContext, tx *db.Session, form *forms.DeployEnvForm)
 		return nil, e.New(e.BadRequest, http.StatusBadRequest)
 	}
 
+	// 检查自动纠漂移、推送到分支时重新部署时，是否了配置自动审批
+	if !services.CheckoutAutoApproval(form.AutoApproval, form.AutoRepairDrift, form.Triggers) {
+		return nil, e.New(e.EnvCheckAutoApproval, http.StatusBadRequest)
+	}
+
 	envQuery := services.QueryWithProjectId(services.QueryWithOrgId(tx, c.OrgId), c.ProjectId)
 	env, err := services.GetEnvById(envQuery, form.Id)
 	if err != nil && err.Code() != e.EnvNotExists {
@@ -557,7 +685,19 @@ func envDeploy(c *ctx.ServiceContext, tx *db.Session, form *forms.DeployEnvForm)
 			env.AutoDestroyAt = &at
 		}
 	}
-
+	cronDriftParam, err := GetCronDriftParam(forms.CronDriftForm{
+		BaseForm:         form.BaseForm,
+		CronDriftExpress: form.CronDriftExpress,
+		AutoRepairDrift:  form.AutoRepairDrift,
+		OpenCronDrift:    form.OpenCronDrift,
+	})
+	if err != nil {
+		return nil, err
+	}
+	env.AutoRepairDrift = cronDriftParam.AutoRepairDrift
+	env.OpenCronDrift = cronDriftParam.OpenCronDrift
+	env.CronDriftExpress = cronDriftParam.CronDriftExpress
+	env.NextDriftTaskTime = cronDriftParam.NextDriftTaskTime
 	if form.HasKey("triggers") {
 		env.Triggers = form.Triggers
 	}
@@ -777,4 +917,92 @@ func ResourceDetail(c *ctx.ServiceContext, form *forms.ResourceDetailForm) (*mod
 		}
 	}
 	return &resultAttrs, nil
+}
+
+// SearchEnvResourcesGraph 查询环境资源列表
+func SearchEnvResourcesGraph(c *ctx.ServiceContext, form *forms.SearchEnvResourceGraphForm) (interface{}, e.Error) {
+	if c.OrgId == "" || c.ProjectId == "" || form.Id == "" {
+		return nil, e.New(e.BadRequest, http.StatusBadRequest)
+	}
+
+	env, err := services.GetEnvById(c.DB(), form.Id)
+	if err != nil && err.Code() != e.EnvNotExists {
+		return nil, e.New(err.Code(), err, http.StatusNotFound)
+	} else if err != nil {
+		c.Logger().Errorf("error get env, err %s", err)
+		return nil, e.New(e.DBError, err, http.StatusInternalServerError)
+	}
+
+	// 无资源变更
+	if env.LastResTaskId == "" {
+		return nil, nil
+	}
+
+	return SearchTaskResourcesGraph(c, &forms.SearchTaskResourceGraphForm{
+		Id:        env.LastResTaskId,
+		Dimension: form.Dimension,
+	})
+}
+
+// ResourceGraphDetail 查询部署成功后资源的详细信息
+func ResourceGraphDetail(c *ctx.ServiceContext, form *forms.ResourceGraphDetailForm) (interface{}, e.Error) {
+	if c.OrgId == "" || c.ProjectId == "" || form.Id == "" {
+		return nil, e.New(e.BadRequest, http.StatusBadRequest)
+	}
+
+	resource, err := services.GetResourceById(c.DB(), form.ResourceId)
+	if err != nil {
+		// 如果没有查询到资源信息的话，有可能是新增的漂移资源
+		if e.IsRecordNotFound(err.Err()) {
+			// 尝试查询一下，如果查询到了直接返回
+			resourceDrift, err := services.GetDriftResourceById(c.DB(), form.ResourceId.String())
+			if err != nil {
+				c.Logger().Errorf("error get resource, err %s", err)
+				return nil, err
+			}
+			return resourceDrift, nil
+		}
+		c.Logger().Errorf("error get resource, err %s", err)
+		return nil, e.New(e.DBError, err, http.StatusInternalServerError)
+	}
+
+	task, err := services.GetTaskById(c.DB(), resource.TaskId)
+	if err != nil {
+		c.Logger().Errorf("error get task, err %s", err)
+		return nil, e.New(e.DBError, err, http.StatusInternalServerError)
+	}
+
+	env, err := services.GetEnvById(c.DB(), task.EnvId)
+	if err != nil {
+		return nil, err
+	}
+
+	res, err := services.GetResourceDetail(c.DB(), env, resource.Id)
+	if err != nil {
+		c.Logger().Errorf("error get resource, err %s", err)
+		return nil, e.New(e.DBError, err, http.StatusInternalServerError)
+	}
+
+	if res.EnvId != form.Id || res.OrgId != c.OrgId || res.ProjectId != c.ProjectId {
+		c.Logger().Errorf("Environment ID and resource ID do not match")
+		return nil, e.New(e.DBError, err, http.StatusForbidden)
+	}
+	resultAttrs := resource.Attrs
+	if len(res.SensitiveKeys) > 0 {
+		set := map[string]interface{}{}
+		for _, value := range resource.SensitiveKeys {
+			set[value] = nil
+		}
+		for k, _ := range resultAttrs {
+			// 如果state 中value 存在与sensitive 设置，展示时不展示详情
+			if _, ok := set[k]; ok {
+				resultAttrs[k] = "(sensitive value)"
+			}
+		}
+	}
+	if res.ResourceDetail != "" {
+		res.IsDrift = true
+	}
+	res.Attrs = resultAttrs
+	return res, nil
 }

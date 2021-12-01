@@ -52,6 +52,8 @@ const (
 	InvalidAccessKeyId     = 10380 // AccessKeyId错误
 	InvalidAccessKeySecret = 10381
 	ForbiddenAccessKey     = 10382
+	TemplateNameRepeat     = 10383
+	TemplateWorkdirError   = 10384
 
 	//// 第三方服务错误 104
 	LdapError       = 10410 // ldap 出错
@@ -133,6 +135,7 @@ const (
 	EnvArchived            = 30813
 	EnvCannotArchiveActive = 30814
 	EnvDeploying           = 30815
+	EnvCheckAutoApproval   = 30816
 
 	//// task 309
 	TaskAlreadyExists     = 30910
@@ -175,6 +178,10 @@ const (
 	VariableGroupAlreadyExist   = 31410
 	VariableGroupNotExist       = 31411
 	VariableGroupAliasDuplicate = 31412
+
+	//cron 315
+	CronExpressError = 31500
+	CronTaskFailed   = 31501
 )
 
 var errorMsgs = map[int]map[string]string{
@@ -219,6 +226,12 @@ var errorMsgs = map[int]map[string]string{
 	},
 	BadParam: {
 		"zh-cn": "无效参数",
+	},
+	TemplateNameRepeat: {
+		"zh-cn": "云模版名称重复",
+	},
+	TemplateWorkdirError: {
+		"zh-cn": "工作目录校验失败",
 	},
 	BadRequest: {
 		"zh-cn": "无效请求",
@@ -434,6 +447,9 @@ var errorMsgs = map[int]map[string]string{
 	EnvDeploying: {
 		"zh-cn": "环境正在部署中，请不要重复发起",
 	},
+	EnvCheckAutoApproval: {
+		"zh-cn": "配置自动纠漂移、推送到分支时重新部署时，必须配置自动审批",
+	},
 	TaskAlreadyExists: {
 		"zh-cn": "任务已经存在",
 	},
@@ -534,5 +550,11 @@ var errorMsgs = map[int]map[string]string{
 
 	PolicyScanNotEnabled: {
 		"zh-cn": "扫描未启用",
+	},
+	CronExpressError: {
+		"zh-cn": "cron定时任务表达式错误",
+	},
+	CronTaskFailed: {
+		"zh-cn": "cron定时任务执行失败",
 	},
 }

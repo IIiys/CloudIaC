@@ -91,6 +91,9 @@ func QueryEnvDetail(query *db.Session) *db.Session {
 	// 密钥名称
 	query = query.Joins("left join iac_key as k on k.id = iac_env.key_id").
 		LazySelectAppend("k.name as key_name,iac_env.*")
+	// 资源是否发生漂移
+	query = query.Joins("left join (select task_id from iac_resource_drift group by task_id) as rd on rd.task_id = iac_env.last_drift_task_id").
+		LazySelectAppend("!ISNULL(rd.task_id) as is_drift")
 
 	return query
 }
@@ -116,6 +119,10 @@ func GetEnvByTplId(tx *db.Session, tplId models.Id) ([]models.Env, error) {
 
 func QueryActiveEnv(query *db.Session) *db.Session {
 	return query.Model(&models.Env{}).Where("status != ? OR deploying = ?", models.EnvStatusInactive, true)
+}
+
+func QueryDeploySucessEnv(query *db.Session) *db.Session {
+	return query.Model(&models.Env{}).Where("status = ?", models.EnvStatusActive)
 }
 
 func QueryEnv(query *db.Session) *db.Session {
@@ -232,6 +239,10 @@ func GetDefaultRunner() (string, e.Error) {
 // tf变量
 // 环境变量
 
+//
+// tf变量
+// 环境变量
+
 func GetSampleValidVariables(tx *db.Session, orgId, projectId, tplId, envId models.Id, sampleVariables []forms.SampleVariables) ([]forms.Variable, e.Error) {
 	resp := make([]forms.Variable, 0)
 	vars, err, _ := GetValidVariables(tx, consts.ScopeEnv, orgId, projectId, tplId, envId, true)
@@ -243,8 +254,8 @@ func GetSampleValidVariables(tx *db.Session, orgId, projectId, tplId, envId mode
 			// 对于第三方调用api创建的环境来说，当前作用域是无变量的，sampleVariables中的变量一种是继承性下来的、另一种是新建的
 			// 这里需要判断变量如果修改了就在当前作用域创建一个变量
 			// 比较变量名是否相同，相同的变量比较变量的值是否发生变化, 发生变化则创建
-			if (v.Name == value.Name &&  value.Type == consts.VarTypeEnv) ||
-				 (v.Name == fmt.Sprintf("TF_VAR_%s", value.Name) && value.Type == consts.VarTypeTerraform) {
+			if (v.Name == value.Name && value.Type == consts.VarTypeEnv) ||
+				(v.Name == fmt.Sprintf("TF_VAR_%s", value.Name) && value.Type == consts.VarTypeTerraform) {
 				if v.Value != value.Value {
 					resp = append(resp, forms.Variable{
 						Scope: consts.ScopeEnv,
@@ -266,4 +277,24 @@ func GetSampleValidVariables(tx *db.Session, orgId, projectId, tplId, envId mode
 	}
 
 	return resp, nil
+}
+
+// CheckoutAutoApproval 配置漂移自动执行apply、commit自动部署apply是否配置自动审批
+func CheckoutAutoApproval(autoApproval, autoDrift bool, triggers []string) bool {
+	if autoApproval {
+		return true
+	}
+	// 漂移自动执行apply检测，当勾选漂移自动检测时自动审批同时勾选
+	if autoDrift {
+		return false
+	}
+
+	// 配置commit自动apply时，必须勾选自动审批
+	for _, v := range triggers {
+		if v == consts.EnvTriggerCommit {
+			return false
+		}
+	}
+
+	return true
 }

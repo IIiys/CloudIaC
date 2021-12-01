@@ -109,3 +109,16 @@ func GetResourceById(tx *db.Session, id models.Id) (*models.Resource, e.Error) {
 	}
 	return &r, nil
 }
+
+func GetResourceDetail(tx *db.Session, env *models.Env, resourceId models.Id) (*Resource, e.Error) {
+	r := &Resource{}
+	if err := tx.Table("iac_resource as r").Debug().
+		Joins("left join iac_resource_drift as rd on rd.address = r.address  and rd.env_id = ? and rd.task_id = ?", env.Id, env.LastDriftTaskId).
+		Where("r.org_id = ? AND r.project_id = ? AND r.env_id = ? AND r.task_id = ? AND r.id = ?",
+			env.OrgId, env.ProjectId, env.Id, env.LastResTaskId, resourceId).
+		LazySelectAppend("r.*, rd.resource_detail, rd.create_at").
+		First(r); err != nil {
+		return nil, e.New(e.DBError, err)
+	}
+	return r, nil
+}

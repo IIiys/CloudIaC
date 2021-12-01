@@ -5,6 +5,7 @@ package models
 import (
 	"cloudiac/portal/libs/db"
 	"path"
+	"time"
 
 	"github.com/lib/pq"
 )
@@ -76,6 +77,13 @@ type Env struct {
 
 	ExtraData JSON   `json:"extraData" gorm:"type:json"` // 扩展字段，用于存储外部服务调用时的信息
 	Callback  string `json:"callback" gorm:"default:''"` // 外部请求的回调方式
+
+	// 偏移检测相关
+	CronDriftExpress  string     `json:"cronDriftExpress" gorm:"default:''"`     // 偏移检测任务的Cron表达式
+	AutoRepairDrift   bool       `json:"autoRepairDrift" gorm:"default:false"`   // 是否进行自动纠偏
+	OpenCronDrift     bool       `json:"openCronDrift" gorm:"default:false"`     // 是否开启偏移检测
+	NextDriftTaskTime *time.Time `json:"nextDriftTaskTime" gorm:"type:datetime"` // 下次执行偏移检测任务的时间
+	LastDriftTaskId   Id         `json:"lastDriftTaskId" gorm:"size:32"`         // 最后一次执行漂移检测任务id
 }
 
 func (Env) TableName() string {
@@ -120,4 +128,5 @@ type EnvDetail struct {
 	KeyName       string `json:"keyName"`       // 密钥名称
 	TaskId        Id     `json:"taskId"`        // 当前作业ID
 	CommitId      string `json:"commitId"`      // Commit ID
+	IsDrift       bool   `json:"isDrift"`
 }
